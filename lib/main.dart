@@ -2,17 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/src/widgets/framework.dart' as flFramework;
 import 'package:flutter/src/widgets/basic.dart' as flPadding;
 import 'dart:convert';
-import 'dart:math';
+
 import 'dart:typed_data';
-import 'package:hex/hex.dart';
 
-import "package:pointycastle/export.dart";
 import 'package:webcrypto/webcrypto.dart';
-
-/* in pubspec.yaml eintragen:
-  pointycastle: ^3.1.1
-  dargon2_flutter: ^2.1.0
- */
 
 void main() => runApp(MyApp());
 
@@ -124,30 +117,35 @@ class _MyWidgetState extends flFramework.State<MyWidget> {
   Future<String> runYourMainDartCode() async {
     clearConsole();
 
-    //_completeRunOwnEcdh();
-    //_completeRunOwn();
+    printC('webcrypto: RSA PSS padding String signature\n');
 
-    printC('webcrypto: AES CBC String encryption with PBKDF2 derived key\n');
+    final dataToSignString = 'The quick brown fox jumps over the lazy dog';
+    Uint8List dataToSignBytes = createUint8ListFromString(dataToSignString);
+    printC('dataToSign: ' + dataToSignString);
 
-    final plaintext = 'The quick brown fox jumps over the lazy dog';
-    printC('plaintext: ' + plaintext);
-    final password = 'secret password';
+    // usually we would load the private and public key from a file or keystore
+    // here we use hardcoded keys for demonstration - don't do this in real programs
 
-    // encryption
-    printC('\n* * * Encryption * * *');
-    String ciphertextBase64 = await aesCbcPbkdf2EncryptToBase64Wc(password, plaintext);
-    printC('ciphertext (Base64): ' + ciphertextBase64);
+    printC('\n* * * sign the plaintext with the RSA private key * * *');
+    final privateKeyPem = loadRsaPrivateKeyPem();
+    final privateKeyBytes = getBytesFromPEMString(privateKeyPem);
+    RsaPssPrivateKey rsaPrivateKey =
+        await RsaPssPrivateKey.importPkcs8Key(privateKeyBytes, Hash.sha256);
+    //printC('used private key:\n' + privateKeyPem);
+    String signatureBase64 =
+        await rsaSignToBase64Wc(rsaPrivateKey, dataToSignBytes);
+    printC('\nsignature (Base64): ' + signatureBase64);
+
     printC(
-        'output is (Base64) salt : (Base64) iv : (Base64) ciphertext');
-
-    printC('\n* * * Decryption * * *');
-    var ciphertextDecryptionBase64 = ciphertextBase64;
-    printC('ciphertext (Base64): ' + ciphertextDecryptionBase64);
-    printC(
-        'input is (Base64) salt : (Base64) iv : (Base64) ciphertext');
-    var decryptedtext = await aesCbcPbkdf2DecryptFromBase64Wc(password, ciphertextDecryptionBase64);
-    printC('plaintext:  ' + decryptedtext);
-    
+        '\n* * * verify the signature against the plaintext with the RSA public key * * *');
+    final publicKeyPem = loadRsaPublicKeyPem();
+    final publicKeyBytes = getBytesFromPEMString(publicKeyPem);
+    RsaPssPublicKey rsaPublicKey =
+        await RsaPssPublicKey.importSpkiKey(publicKeyBytes, Hash.sha256);
+    //printC('used public key:\n' + publicKeyPem);
+    bool signatureVerified = await rsaVerifiySignatureFromBase64Wc(
+        rsaPublicKey, dataToSignBytes, signatureBase64);
+    printC('\nsignature (Base64) verified: $signatureVerified');
     return '';
   }
 
@@ -155,166 +153,88 @@ class _MyWidgetState extends flFramework.State<MyWidget> {
     printC('execute additional code');
   }
 
-  Future<String> aesGcmPbkdf2EncryptToBase64Wc(String password, String plaintext) async {
-    var plaintextUint8 = createUint8ListFromString(plaintext);
-    var passphrase = createUint8ListFromString(password);
-    final PBKDF2_ITERATIONS = 15000;
-    final key = await Pbkdf2SecretKey.importRawKey(passphrase);
-    final salt = generateSalt32ByteWc();
-    final derivedBits = await key.deriveBits(256, Hash.sha256, salt, PBKDF2_ITERATIONS);
-    final nonce = generateNonce12ByteWc();
-    AesGcmSecretKey aesGcmSecretKey = await AesGcmSecretKey.importRawKey(derivedBits);
-    Uint8List ciphertext = await aesGcmSecretKey.encryptBytes(plaintextUint8, nonce);
-    String ciphertextBase64 = base64Encoding(ciphertext);
-    String nonceBase64 = base64Encoding(nonce);
-    String saltBase64 = base64Encoding(salt);
-    return saltBase64 +
-        ':' +
-        nonceBase64 +
-        ':' +
-        ciphertextBase64;
+  // don't worry - it is a sample key
+  String loadRsaPublicKeyPem() {
+    return ('''-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8EmWJUZ/Osz4vXtUU2S+
+0M4BP9+s423gjMjoX+qP1iCnlcRcFWxthQGN2CWSMZwR/vY9V0un/nsIxhZSWOH9
+iKzqUtZD4jt35jqOTeJ3PCSr48JirVDNLet7hRT37Ovfu5iieMN7ZNpkjeIG/CfT
+/QQl7R+kO/EnTmL3QjLKQNV/HhEbHS2/44x7PPoHqSqkOvl8GW0qtL39gTLWgAe8
+01/w5PmcQ38CKG0oT2gdJmJqIxNmAEHkatYGHcMDtXRBpOhOSdraFj6SmPyHEmLB
+ishaq7Jm8NPPNK9QcEQ3q+ERa5M6eM72PpF93g2p5cjKgyzzfoIV09Zb/LJ2aW2g
+QwIDAQAB
+-----END PUBLIC KEY-----''');
   }
 
-  Future<String> aesGcmPbkdf2DecryptFromBase64Wc(String password, String data) async {
-    var parts = data.split(':');
-    var salt = base64.decode(parts[0]);
-    var nonce = base64.decode(parts[1]);
-    var ciphertext = base64.decode(parts[2]);
-    var passphrase = createUint8ListFromString(password);
-    final PBKDF2_ITERATIONS = 15000;
-    final key = await Pbkdf2SecretKey.importRawKey(passphrase);
-    final derivedBits = await key.deriveBits(256, Hash.sha256, salt, PBKDF2_ITERATIONS);
-    AesGcmSecretKey aesGcmSecretKey = await AesGcmSecretKey.importRawKey(derivedBits);
-    Uint8List decryptedtext = await aesGcmSecretKey.decryptBytes(ciphertext, nonce);
-    return new String.fromCharCodes(decryptedtext);
+  // don't worry - it is a sample key
+  String loadRsaPrivateKeyPem() {
+    return ('''-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDwSZYlRn86zPi9
+e1RTZL7QzgE/36zjbeCMyOhf6o/WIKeVxFwVbG2FAY3YJZIxnBH+9j1XS6f+ewjG
+FlJY4f2IrOpS1kPiO3fmOo5N4nc8JKvjwmKtUM0t63uFFPfs69+7mKJ4w3tk2mSN
+4gb8J9P9BCXtH6Q78SdOYvdCMspA1X8eERsdLb/jjHs8+gepKqQ6+XwZbSq0vf2B
+MtaAB7zTX/Dk+ZxDfwIobShPaB0mYmojE2YAQeRq1gYdwwO1dEGk6E5J2toWPpKY
+/IcSYsGKyFqrsmbw0880r1BwRDer4RFrkzp4zvY+kX3eDanlyMqDLPN+ghXT1lv8
+snZpbaBDAgMBAAECggEBAIVxmHzjBc11/73bPB2EGaSEg5UhdzZm0wncmZCLB453
+XBqEjk8nhDsVfdzIIMSEVEowHijYz1c4pMq9osXR26eHwCp47AI73H5zjowadPVl
+uEAot/xgn1IdMN/boURmSj44qiI/DcwYrTdOi2qGA+jD4PwrUl4nsxiJRZ/x7PjL
+hMzRbvDxQ4/Q4ThYXwoEGiIBBK/iB3Z5eR7lFa8E5yAaxM2QP9PENBr/OqkGXLWV
+qA/YTxs3gAvkUjMhlScOi7PMwRX9HsrAeLKbLuC1KJv1p2THUtZbOHqrAF/uwHaj
+ygUblFaa/BTckTN7PKSVIhp7OihbD04bSRrh+nOilcECgYEA/8atV5DmNxFrxF1P
+ODDjdJPNb9pzNrDF03TiFBZWS4Q+2JazyLGjZzhg5Vv9RJ7VcIjPAbMy2Cy5BUff
+EFE+8ryKVWfdpPxpPYOwHCJSw4Bqqdj0Pmp/xw928ebrnUoCzdkUqYYpRWx0T7YV
+RoA9RiBfQiVHhuJBSDPYJPoP34kCgYEA8H9wLE5L8raUn4NYYRuUVMa+1k4Q1N3X
+Bixm5cccc/Ja4LVvrnWqmFOmfFgpVd8BcTGaPSsqfA4j/oEQp7tmjZqggVFqiM2m
+J2YEv18cY/5kiDUVYR7VWSkpqVOkgiX3lK3UkIngnVMGGFnoIBlfBFF9uo02rZpC
+5o5zebaDImsCgYAE9d5wv0+nq7/STBj4NwKCRUeLrsnjOqRriG3GA/TifAsX+jw8
+XS2VF+PRLuqHhSkQiKazGr2Wsa9Y6d7qmxjEbmGkbGJBC+AioEYvFX9TaU8oQhvi
+hgA6ZRNid58EKuZJBbe/3ek4/nR3A0oAVwZZMNGIH972P7cSZmb/uJXMOQKBgQCs
+FaQAL+4sN/TUxrkAkylqF+QJmEZ26l2nrzHZjMWROYNJcsn8/XkaEhD4vGSnazCu
+/B0vU6nMppmezF9Mhc112YSrw8QFK5GOc3NGNBoueqMYy1MG8Xcbm1aSMKVv8xba
+rh+BZQbxy6x61CpCfaT9hAoA6HaNdeoU6y05lBz1DQKBgAbYiIk56QZHeoZKiZxy
+4eicQS0sVKKRb24ZUd+04cNSTfeIuuXZrYJ48Jbr0fzjIM3EfHvLgh9rAZ+aHe/L
+84Ig17KiExe+qyYHjut/SC0wODDtzM/jtrpqyYa5JoEpPIaUSgPuTH/WhO3cDsx6
+3PIW4/CddNs8mCSBOqTnoaxh
+-----END PRIVATE KEY-----''');
   }
 
-  Future<String> aesCbcPbkdf2EncryptToBase64Wc(String password, String plaintext) async {
-    var plaintextUint8 = createUint8ListFromString(plaintext);
-    var passphrase = createUint8ListFromString(password);
-    final PBKDF2_ITERATIONS = 15000;
-    final key = await Pbkdf2SecretKey.importRawKey(passphrase);
-    final salt = generateSalt32ByteWc();
-    final derivedBits = await key.deriveBits(256, Hash.sha256, salt, PBKDF2_ITERATIONS);
-    final iv = generateIv16ByteWc();
-    AesCbcSecretKey aesCbcSecretKey = await AesCbcSecretKey.importRawKey(derivedBits);
-    Uint8List ciphertext = await aesCbcSecretKey.encryptBytes(plaintextUint8, iv);
-    String ciphertextBase64 = base64Encoding(ciphertext);
-    String ivBase64 = base64Encoding(iv);
-    String saltBase64 = base64Encoding(salt);
-    return saltBase64 +
-        ':' +
-        ivBase64 +
-        ':' +
-        ciphertextBase64;
+  Uint8List getBytesFromPEMString(String pem) {
+    var lines = LineSplitter.split(pem)
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+
+    if (lines.length < 2 ||
+        !lines.first.startsWith('-----BEGIN') ||
+        !lines.last.startsWith('-----END')) {
+      throw ArgumentError('The given string does not have the correct '
+          'begin/end markers expected in a PEM file.');
+    }
+    var base64 = lines.sublist(1, lines.length - 1).join('');
+    return Uint8List.fromList(base64Decode(base64));
   }
 
-  Future<String> aesCbcPbkdf2DecryptFromBase64Wc(String password, String data) async {
-    var parts = data.split(':');
-    var salt = base64.decode(parts[0]);
-    var iv = base64.decode(parts[1]);
-    var ciphertext = base64.decode(parts[2]);
-    var passphrase = createUint8ListFromString(password);
-    final PBKDF2_ITERATIONS = 15000;
-    final key = await Pbkdf2SecretKey.importRawKey(passphrase);
-    final derivedBits = await key.deriveBits(256, Hash.sha256, salt, PBKDF2_ITERATIONS);
-    AesCbcSecretKey aesCbcSecretKey = await AesCbcSecretKey.importRawKey(derivedBits);
-    Uint8List decryptedtext = await aesCbcSecretKey.decryptBytes(ciphertext, iv);
-    return new String.fromCharCodes(decryptedtext);
+  Future<String> rsaSignToBase64Wc(
+      RsaPssPrivateKey privateKey, Uint8List messageByte) async {
+    try {
+      var signature = await privateKey.signBytes(
+          messageByte, 32); // 32 byte  = 256 bit for SHA-256
+      return base64Encoding(signature);
+    } on Error {
+      return '';
+    }
   }
 
-  String aesGcmPbkdf2EncryptToBase64Pc(String password, String plaintext) {
-    var plaintextUint8 = createUint8ListFromString(plaintext);
-    var passphrase = createUint8ListFromString(password);
-    final PBKDF2_ITERATIONS = 5000;
-    final salt = generateSalt32Byte();
-    KeyDerivator derivator =
-        new PBKDF2KeyDerivator(new HMac(new SHA256Digest(), 64));
-    Pbkdf2Parameters params = new Pbkdf2Parameters(salt, PBKDF2_ITERATIONS, 32);
-    derivator.init(params);
-    final key = derivator.process(passphrase);
-    final nonce = generateRandomNonce();
-    final cipher = GCMBlockCipher(AESFastEngine());
-    var aeadParameters =
-        AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0));
-    cipher.init(true, aeadParameters);
-    var ciphertextWithTag = cipher.process(plaintextUint8);
-    var ciphertextWithTagLength = ciphertextWithTag.lengthInBytes;
-    var ciphertextLength =
-        ciphertextWithTagLength - 16; // 16 bytes = 128 bit tag length
-    var ciphertext =
-        Uint8List.sublistView(ciphertextWithTag, 0, ciphertextLength);
-    var gcmTag = Uint8List.sublistView(
-        ciphertextWithTag, ciphertextLength, ciphertextWithTagLength);
-    final saltBase64 = base64.encode(salt);
-    final nonceBase64 = base64.encode(nonce);
-    final ciphertextBase64 = base64.encode(ciphertext);
-    final gcmTagBase64 = base64.encode(gcmTag);
-    return saltBase64 +
-        ':' +
-        nonceBase64 +
-        ':' +
-        ciphertextBase64 +
-        ':' +
-        gcmTagBase64;
-  }
-
-  String aesGcmPbkdf2DecryptFromBase64Pc(String password, String data) {
-    var parts = data.split(':');
-    var salt = base64.decode(parts[0]);
-    var nonce = base64.decode(parts[1]);
-    var ciphertext = base64.decode(parts[2]);
-    var gcmTag = base64.decode(parts[3]);
-    var bb = BytesBuilder();
-    bb.add(ciphertext);
-    bb.add(gcmTag);
-    var ciphertextWithTag = bb.toBytes();
-    var passphrase = createUint8ListFromString(password);
-    final PBKDF2_ITERATIONS = 5000;
-    KeyDerivator derivator =
-        new PBKDF2KeyDerivator(new HMac(new SHA256Digest(), 64));
-    Pbkdf2Parameters params = new Pbkdf2Parameters(salt, PBKDF2_ITERATIONS, 32);
-    derivator.init(params);
-    final key = derivator.process(passphrase);
-    final cipher = GCMBlockCipher(AESFastEngine());
-    var aeadParameters =
-        AEADParameters(KeyParameter(key), 128, nonce, Uint8List(0));
-    cipher.init(false, aeadParameters);
-    return new String.fromCharCodes(cipher.process(ciphertextWithTag));
-  }
-
-  Uint8List generateSalt32ByteWc() {
-    final salt = Uint8List(32);
-    fillRandomBytes(salt);
-    return salt;
-  }
-
-  Uint8List generateNonce12ByteWc() {
-    final nonce = Uint8List(12);
-    fillRandomBytes(nonce);
-    return nonce;
-  }
-
-  Uint8List generateIv16ByteWc() {
-    final nonce = Uint8List(16);
-    fillRandomBytes(nonce);
-    return nonce;
-  }
-
-  Uint8List generateSalt32Byte() {
-    final _sGen = Random.secure();
-    final _seed =
-        Uint8List.fromList(List.generate(32, (n) => _sGen.nextInt(255)));
-    SecureRandom sec = SecureRandom("Fortuna")..seed(KeyParameter(_seed));
-    return sec.nextBytes(32);
-  }
-
-  Uint8List generateRandomNonce() {
-    final _sGen = Random.secure();
-    final _seed =
-        Uint8List.fromList(List.generate(32, (n) => _sGen.nextInt(255)));
-    SecureRandom sec = SecureRandom("Fortuna")..seed(KeyParameter(_seed));
-    return sec.nextBytes(12);
+  Future<bool> rsaVerifiySignatureFromBase64Wc(RsaPssPublicKey publicKey,
+      Uint8List messageByte, String signatureBase64) async {
+    try {
+      var signature = base64Decoding(signatureBase64);
+      var verificationResult = await publicKey.verifyBytes(
+          signature, messageByte, 32); // 32 byte  = 256 bit for SHA-256
+      return verificationResult;
+    } on Error {
+      return false;
+    }
   }
 
   Uint8List createUint8ListFromString(String s) {
@@ -332,5 +252,4 @@ class _MyWidgetState extends flFramework.State<MyWidget> {
   Uint8List base64Decoding(String input) {
     return base64.decode(input);
   }
-
 }
